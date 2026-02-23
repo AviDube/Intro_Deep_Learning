@@ -639,6 +639,7 @@ def valid_epoch_ver(model, pair_dataloader, device, fpr_targets=None):
         fpr_targets = [1e-4, 5e-4, 1e-3, 5e-3, 5e-2]
 
     metric_dict = verification_metrics(match_labels, scores, fpr_targets)
+    print("Verification Metrics:", metric_dict)
     return metric_dict
 
 
@@ -668,6 +669,7 @@ def save_model(model, optimizer, scheduler, metrics, epoch, path):
 
 
 def load_model(model, optimizer=None, scheduler=None, path="./checkpoint.pth", device=None):
+    print(f"Loading checkpoint from {path}...")
     map_location = device if device is not None else "cpu"
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)
 
@@ -684,8 +686,9 @@ def load_model(model, optimizer=None, scheduler=None, path="./checkpoint.pth", d
 
     return model, optimizer, scheduler, epoch, metrics
 
+model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path=os.path.join(checkpoint_dir, "last.pth"), device=DEVICE)
 
-start_epoch = 0
+start_epoch = epoch
 best_cls_acc = 0.0
 best_ret_acc = 0.0
 best_eer = float('inf')
