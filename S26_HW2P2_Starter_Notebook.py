@@ -45,7 +45,7 @@ config = {
     'data_root': "/home/avid/Intro_Deep_Learning/hw2p2_data",
     'batch_size': 128,
     'lr': 0.1,
-    'epochs': 70,
+    'epochs': 50,
     'num_classes': 8631,
     'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_checkpoint",
     'augument': True,
@@ -403,6 +403,8 @@ model = ResNet(
     arc_m       = config['arc_m'],
 ).to(DEVICE)
 
+summary(model, (3, 112, 112))
+
 
 criterion = nn.CrossEntropyLoss()
 
@@ -645,7 +647,7 @@ def valid_epoch_ver(model, pair_dataloader, device, fpr_targets=None):
 wandb.login(key="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")
 
 run = wandb.init(
-    name = "Test_new_arch_wider_shallow",
+    name = "Long Training Run",
     project = "HW2P2",
     config = config
 )
@@ -685,9 +687,7 @@ def load_model(model, optimizer=None, scheduler=None, path="./checkpoint.pth", d
 
     return model, optimizer, scheduler, epoch, metrics
 
-model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path=os.path.join(checkpoint_dir, "last.pth"), device=DEVICE)
-
-start_epoch = epoch
+start_epoch = 0
 best_cls_acc = 0.0
 best_ret_acc = 0.0
 best_eer = float('inf')
