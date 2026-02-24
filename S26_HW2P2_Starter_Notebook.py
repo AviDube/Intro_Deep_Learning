@@ -43,17 +43,17 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 config = {
     'data_root': "/home/avid/Intro_Deep_Learning/hw2p2_data",
-    'batch_size': 128,
-    'lr': 0.1,
+    'batch_size': 256,
+    'lr': 0.005,
     'epochs': 50,
     'num_classes': 8631,
     'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_checkpoint",
-    'augument': True,
+    'augment': True,
     'embed_dim'      : 256,
     'arc_s'          : 64.0,
-    'arc_m'          : 0.5,
+    'arc_m'          : 0.45,
     'weight_decay'   : 1e-4,
-    'warmup_epochs'  : 3,
+    'warmup_epochs'  : 2,
     'num_workers'   : 4,
 }
 
@@ -82,7 +82,7 @@ def create_transforms(image_size: int = 112, augment: bool = True) -> T.Compose:
         ])
     return T.Compose(transform_list)
 
-train_transforms = create_transforms(augment=config['augument'])
+train_transforms = create_transforms(augment=config['augment'])
 val_transforms   = create_transforms(augment=False)
 
 
@@ -310,7 +310,7 @@ class ArcFaceLayer(nn.Module):
             if labels is None:
                 return cosine * self.s
 
-            sine = torch.sqrt(1.0 - torch.pow(cosine, 2).clamp(0, 1))
+            sine = torch.sqrt(torch.clamp(1.0 - torch.pow(cosine, 2), min=1e-7))
             
             phi = cosine * self.cos_m - sine * self.sin_m
 
@@ -362,8 +362,8 @@ class ResNet(nn.Module):
             nn.BatchNorm1d(embed_dim)
         )
         # Uncomment when fine tuning with ArcFace
-        # self.arc = ArcFaceLayer(embed_dim, num_classes, s=arc_s, m=arc_m)
-        self.classifier = nn.Linear(embed_dim, num_classes) 
+        self.arc = ArcFaceLayer(embed_dim, num_classes, s=arc_s, m=arc_m)
+        # self.classifier = nn.Linear(embed_dim, num_classes) 
 
         self._init_weights()
 
@@ -391,9 +391,9 @@ class ResNet(nn.Module):
         if return_feats:
             return {"feats": feats}
         # Uncomment when fine tuning with ArcFace
-        # arc_logits = self.arc(feats, labels)
-        out = self.classifier(feats)
-        return {"feats": feats, "out": out}
+        arc_logits = self.arc(feats, labels)
+        # out = self.classifier(feats)
+        return {"feats": feats, "out": arc_logits}
 
 
 model = ResNet(
@@ -525,12 +525,6 @@ def train_epoch(
         with torch.amp.autocast(device_type = 'cuda'):
             outputs = model(images, labels=labels)
             logits = outputs["out"]
-
-            # Comment when fine tuning with ArcFace
-            # feats = F.normalize(outputs["feats"])
-            # weight = F.normalize(model.arc.weight)
-            # raw_logits = F.linear(feats, weight) * config['arc_s']
-
             loss = criterion(logits, labels)
 
         scaler.scale(loss).backward()
@@ -622,7 +616,7 @@ def valid_epoch_ver(model, pair_dataloader, device, fpr_targets=None):
         labels = labels.to(device, non_blocking=True)
 
         images = torch.cat([images1, images2], dim=0)
-        outputs = model(images)
+        outputs = model(images, return_feats=True)
         feats = F.normalize(outputs["feats"], dim=1)
 
         feats1, feats2 = feats.chunk(2, dim=0)
@@ -630,8 +624,6 @@ def valid_epoch_ver(model, pair_dataloader, device, fpr_targets=None):
 
         scores.append(similarity.cpu().numpy())
         match_labels.append(labels.cpu().numpy())
-
-        progress.update()
 
     scores = np.concatenate(scores)
     match_labels = np.concatenate(match_labels)
@@ -687,6 +679,22 @@ def load_model(model, optimizer=None, scheduler=None, path="./checkpoint.pth", d
 
     return model, optimizer, scheduler, epoch, metrics
 
+def load_for_finetune(model, path, device):
+    """
+    Special load function for transitioning to ArcFace.
+    Loads ONLY the model weights, uses strict=False, and ignores old optimizers.
+    """
+    print(f"Loading pre-trained backbone from: {path}")
+    checkpoint = torch.load(path, map_location=device)
+    
+    # strict=False is the magic keyword here!
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    
+    print("Backbone weights loaded successfully! ArcFace head is randomly initialized.")
+    return model
+
+
+model = load_for_finetune(model, os.path.join(config["checkpoint_dir"], "last.pth"), DEVICE)
 start_epoch = 0
 best_cls_acc = 0.0
 best_ret_acc = 0.0
@@ -695,6 +703,28 @@ eval_cls = True
 
 for epoch in range(start_epoch, config["epochs"]):
     print(f"\n=== Epoch {epoch + 1}/{config['epochs']} ===")
+
+    if epoch == 0:
+        print("[Phase 1] Freezing backbone. Training ArcFace head only...")
+        for name, param in model.named_parameters():
+            if 'arc' not in name:
+                param.requires_grad = False
+            else:
+                param.requires_grad = True
+                
+        optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=config['lr'], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+        scheduler = get_scheduler(optimizer, warmup_epochs=config['warmup_epochs'], total_epochs=config['epochs'])
+                
+    elif epoch == 2:
+        print("[Phase 2] Unfreezing backbone. Dropping learning rate for full fine-tuning...")
+        for param in model.parameters():
+            param.requires_grad = True
+
+        optimizer = optim.SGD([
+            {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.01},
+            {'params': model.arc.parameters(), 'lr': config['lr'] * 0.1}
+        ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] - 2)
 
     curr_lr = optimizer.param_groups[0]["lr"]
     train_cls_acc, train_loss = train_epoch(
@@ -756,7 +786,7 @@ def test_epoch_ver(model, pair_dataloader, device):
         images2 = images2.to(device, non_blocking=True)
 
         images = torch.cat([images1, images2], dim=0)
-        outputs = model(images)
+        outputs = model(images, return_feats=True)
         feats = F.normalize(outputs["feats"], dim=1)
 
         feats1, feats2 = feats.chunk(2, dim=0)
