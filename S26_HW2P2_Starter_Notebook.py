@@ -49,7 +49,7 @@ config = {
     'num_classes': 8631,
     'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_checkpoint",
     'augument': True,
-    'embed_dim'      : 512,
+    'embed_dim'      : 256,
     'arc_s'          : 64.0,
     'arc_m'          : 0.5,
     'weight_decay'   : 1e-4,
@@ -353,7 +353,6 @@ class ResNet(nn.Module):
         )
         self.stage4 = nn.Sequential(
             SEResBlock(512, 1024, stride=2),
-            SEResBlock(1024, 1024, stride=1)
         )
 
         self.pool      = nn.AdaptiveAvgPool2d((1, 1))
