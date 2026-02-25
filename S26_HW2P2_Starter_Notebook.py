@@ -44,17 +44,17 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 config = {
     'data_root': "/home/avid/Intro_Deep_Learning/hw2p2_data",
     'batch_size': 256,
-    'lr': 0.005,
-    'epochs': 50,
+    'lr': 0.05,
+    'epochs': 40,
     'num_classes': 8631,
-    'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_checkpoint",
+    'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint",
     'augment': True,
     'embed_dim'      : 256,
     'arc_s'          : 64.0,
     'arc_m'          : 0.45,
     'weight_decay'   : 1e-4,
     'warmup_epochs'  : 2,
-    'num_workers'   : 4,
+    'num_workers'   : 12,
 }
 
 def create_transforms(image_size: int = 112, augment: bool = True) -> T.Compose:
@@ -639,7 +639,7 @@ def valid_epoch_ver(model, pair_dataloader, device, fpr_targets=None):
 wandb.login(key="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")
 
 run = wandb.init(
-    name = "Long Training Run",
+    name = "Fine Tuning with ArcFace",
     project = "HW2P2",
     config = config
 )
@@ -685,7 +685,7 @@ def load_for_finetune(model, path, device):
     Loads ONLY the model weights, uses strict=False, and ignores old optimizers.
     """
     print(f"Loading pre-trained backbone from: {path}")
-    checkpoint = torch.load(path, map_location=device)
+    checkpoint = torch.load(path, map_location=device, weights_only=False)
     
     # strict=False is the magic keyword here!
     model.load_state_dict(checkpoint['model_state_dict'], strict=False)
@@ -694,7 +694,7 @@ def load_for_finetune(model, path, device):
     return model
 
 
-model = load_for_finetune(model, os.path.join(config["checkpoint_dir"], "last.pth"), DEVICE)
+model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", DEVICE)
 start_epoch = 0
 best_cls_acc = 0.0
 best_ret_acc = 0.0
@@ -721,8 +721,8 @@ for epoch in range(start_epoch, config["epochs"]):
             param.requires_grad = True
 
         optimizer = optim.SGD([
-            {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.01},
-            {'params': model.arc.parameters(), 'lr': config['lr'] * 0.1}
+            {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.1},
+            {'params': model.arc.parameters(), 'lr': config['lr']}
         ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
         scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] - 2)
 
