@@ -9,7 +9,6 @@ os.environ['KAGGLE_API_TOKEN'] = "KGAT_e4a59dacaeaefc1cf225368be254aeae"
 # Verify
 import kaggle
 api = kaggle.api  # Already authenticated on import
-api.competitions_list_cli()
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
@@ -40,21 +39,22 @@ import csv
 import math
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(DEVICE)
 
 config = {
-    'data_root': "/home/avid/Intro_Deep_Learning/hw2p2_data",
+    'data_root': "/jet/home/adube1/Intro_Deep_Learning/hw2p2_data",
     'batch_size': 256,
     'lr': 0.05,
     'epochs': 40,
     'num_classes': 8631,
-    'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint",
+    'checkpoint_dir': "/jet/home/adube1/Intro_Deep_Learning/hw2_finetuning_checkpoint",
     'augment': True,
     'embed_dim'      : 256,
     'arc_s'          : 64.0,
     'arc_m'          : 0.45,
     'weight_decay'   : 1e-4,
     'warmup_epochs'  : 2,
-    'num_workers'   : 12,
+    'num_workers'   : 4,
 }
 
 def create_transforms(image_size: int = 112, augment: bool = True) -> T.Compose:
@@ -403,8 +403,6 @@ model = ResNet(
     arc_m       = config['arc_m'],
 ).to(DEVICE)
 
-summary(model, (3, 112, 112))
-
 
 criterion = nn.CrossEntropyLoss()
 
@@ -693,9 +691,15 @@ def load_for_finetune(model, path, device):
     print("Backbone weights loaded successfully! ArcFace head is randomly initialized.")
     return model
 
+optimizer = optim.SGD([
+    {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.1},
+    {'params': model.arc.parameters(), 'lr': config['lr']}
+], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] - 2)
 
-model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", DEVICE)
-start_epoch = 0
+# model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", DEVICE)
+model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path="/jet/home/adube1/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", device=DEVICE)
+start_epoch = epoch
 best_cls_acc = 0.0
 best_ret_acc = 0.0
 best_eer = float('inf')
