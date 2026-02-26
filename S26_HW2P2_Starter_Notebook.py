@@ -42,12 +42,12 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print(DEVICE)
 
 config = {
-    'data_root': "/jet/home/adube1/Intro_Deep_Learning/hw2p2_data",
+    'data_root': "/home/avid/Intro_Deep_Learning/hw2p2_data",
     'batch_size': 256,
-    'lr': 0.05,
-    'epochs': 40,
+    'lr': 0.001,
+    'epochs': 15,
     'num_classes': 8631,
-    'checkpoint_dir': "/jet/home/adube1/Intro_Deep_Learning/hw2_finetuning_checkpoint",
+    'checkpoint_dir': "/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint",
     'augment': True,
     'embed_dim'      : 256,
     'arc_s'          : 64.0,
@@ -695,40 +695,47 @@ optimizer = optim.SGD([
     {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.1},
     {'params': model.arc.parameters(), 'lr': config['lr']}
 ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
-scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] - 2)
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
 
-# model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", DEVICE)
-model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path="/jet/home/adube1/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", device=DEVICE)
-start_epoch = epoch
+# model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint/last.pth", DEVICE)
+model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path="/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint/best_ret.pth", device=DEVICE)
+start_epoch = 0
 best_cls_acc = 0.0
 best_ret_acc = 0.0
 best_eer = float('inf')
 eval_cls = True
 
+optimizer = optim.SGD([
+    {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.01},  # 1e-5
+    {'params': model.arc.parameters(), 'lr': config['lr'] * 0.1}  # 1e-4
+], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+
+scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
+
 for epoch in range(start_epoch, config["epochs"]):
     print(f"\n=== Epoch {epoch + 1}/{config['epochs']} ===")
 
-    if epoch == 0:
-        print("[Phase 1] Freezing backbone. Training ArcFace head only...")
-        for name, param in model.named_parameters():
-            if 'arc' not in name:
-                param.requires_grad = False
-            else:
-                param.requires_grad = True
+    # if epoch == 0:
+    #     print("[Phase 1] Freezing backbone. Training ArcFace head only...")
+    #     for name, param in model.named_parameters():
+    #         if 'arc' not in name:
+    #             param.requires_grad = False
+    #         else:
+    #             param.requires_grad = True
                 
-        optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=config['lr'], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
-        scheduler = get_scheduler(optimizer, warmup_epochs=config['warmup_epochs'], total_epochs=config['epochs'])
+    #     optimizer = optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=config['lr'], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+    #     scheduler = get_scheduler(optimizer, warmup_epochs=config['warmup_epochs'], total_epochs=config['epochs'])
                 
-    elif epoch == 2:
-        print("[Phase 2] Unfreezing backbone. Dropping learning rate for full fine-tuning...")
-        for param in model.parameters():
-            param.requires_grad = True
+    # elif epoch == 2:
+        # print("[Phase 2] Unfreezing backbone. Dropping learning rate for full fine-tuning...")
+        # for param in model.parameters():
+        #     param.requires_grad = True
 
-        optimizer = optim.SGD([
-            {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.1},
-            {'params': model.arc.parameters(), 'lr': config['lr']}
-        ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'] - 2)
+        # optimizer = optim.SGD([
+        #     {'params': [p for n, p in model.named_parameters() if 'arc' not in n], 'lr': config['lr'] * 0.1},
+        #     {'params': model.arc.parameters(), 'lr': config['lr']}
+        # ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
+        # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
 
     curr_lr = optimizer.param_groups[0]["lr"]
     train_cls_acc, train_loss = train_epoch(
