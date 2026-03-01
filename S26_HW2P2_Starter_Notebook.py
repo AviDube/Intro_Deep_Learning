@@ -775,7 +775,6 @@ for epoch in range(start_epoch, config["epochs"]):
     if epoch == 10:
         break
 
-
 @torch.no_grad()
 def test_epoch_ver(model, pair_dataloader, device):
     model.eval()
