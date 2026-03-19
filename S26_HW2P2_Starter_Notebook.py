@@ -697,7 +697,7 @@ def load_for_finetune(model, path, device):
 # ], momentum=0.9, weight_decay=config['weight_decay'], nesterov=True)
 # scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config['epochs'])
 
-model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint/best_ret.pth", DEVICE)
+model = load_for_finetune(model, "/home/avid/Intro_Deep_Learning/hw2_checkpoint/best_ret.pth", DEVICE)
 # model, optimizer, scheduler, epoch, metrics = load_model(model, optimizer, scheduler, path="/home/avid/Intro_Deep_Learning/hw2_finetuning_checkpoint/best_ret.pth", device=DEVICE)
 start_epoch = 0
 best_cls_acc = 0.0
