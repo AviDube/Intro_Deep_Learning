@@ -115,7 +115,13 @@ class AudioDataset(torch.utils.data.Dataset):
         '''
 
         self.PHONEMES = PHONEMES
+        self.apply_transformations = apply_transformations
         self.subset = config['subset']
+        
+        # Initialize Time and Frequency masking transforms
+        if self.apply_transformations:
+            self.time_masking = tat.TimeMasking(time_mask_param=70)
+            self.freq_masking = tat.FrequencyMasking(freq_mask_param=12)
 
         # TODO
         # Define the directories containing MFCC and transcript files
@@ -183,8 +189,6 @@ class AudioDataset(torch.utils.data.Dataset):
             self.mfccs.append(mfccs_normalized)
             self.transcripts.append(transcript_indices)
 
-        # self.mfccs          = torch.concatenate(self.mfccs, dim=0)
-        # self.transcripts    = torch.concatenate(self.transcripts, dim=0)
 
         #TODO
         # WHAT SHOULD THE LENGTH OF THE DATASET BE?
@@ -219,7 +223,7 @@ class AudioDataset(torch.utils.data.Dataset):
         return mfcc, transcript
 
 
-    def collate_fn(self,batch):
+    def collate_fn(self, batch):
         '''
         TODO:
         1.  Extract the features and labels from 'batch'
@@ -253,7 +257,16 @@ class AudioDataset(torch.utils.data.Dataset):
         #                  -> Is the order of axes / dimensions as expected for the transform functions?
         #                     -> Time & Freq. Masking functions both expect input of shape (..., freq, time),
         #                        So permute your input dimensions appropriately before & after using these functions.
-
+        if self.apply_transformations:
+            # Permute from [batch, time, freq] to [batch, freq, time]
+            batch_mfcc_pad = batch_mfcc_pad.permute(0, 2, 1)
+            
+            # Apply Time and Frequency masking
+            batch_mfcc_pad = self.time_masking(batch_mfcc_pad)
+            batch_mfcc_pad = self.freq_masking(batch_mfcc_pad)
+            
+            # Permute back to [batch, time, freq]
+            batch_mfcc_pad = batch_mfcc_pad.permute(0, 2, 1)
 
 
         # Return the following values: padded features, padded labels, actual length of features, actual length of the labels
@@ -522,7 +535,20 @@ class LSTMWrapper(torch.nn.Module):
 # #### Encoder class
 
 # In[22]:
+class LockedDropout(nn.Module):
+    def __init__(self, p=0.3):
+        super().__init__()
+        self.p = p
 
+    def forward(self, x):
+        if not self.training or self.p == 0:
+            return x
+        # x is a PackedSequence — need to unpack first
+        x, lens = pad_packed_sequence(x, batch_first=True)
+        mask = x.new_empty(x.size(0), 1, x.size(2)).bernoulli_(1 - self.p)
+        mask = mask / (1 - self.p)
+        x = x * mask
+        return pack_padded_sequence(x, lens, batch_first=True, enforce_sorted=False)
 
 class Encoder(torch.nn.Module):
     '''
@@ -535,12 +561,30 @@ class Encoder(torch.nn.Module):
         # TODO: You can use CNNs as Embedding layer to extract features. Keep in mind the Input dimensions and expected dimension of Pytorch CNN.
         # Food for thought -> What type of Conv layers can be used here?
         #                  -> What should be the size of input channels to the first layer?
-        self.embedding = nn.Conv1d(input_size, 128, kernel_size=1) #TODO
+        self.embedding = nn.Sequential(
+            nn.Conv1d(input_size, 256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Conv1d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Conv1d(256, 256, kernel_size=3, padding=1),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+        )
+# Input: (B, T, 28) → permute → (B, 28, T) → CNN → (B, 256, T) → permute back
 
         # TODO:
         self.BLSTMs = LSTMWrapper(
             # TODO: Look up the documentation. You might need to pass some additional parameters.
-            torch.nn.LSTM(input_size=128, hidden_size=encoder_hidden_size, num_layers=2, bidirectional=True, batch_first=True) #TODO
+            torch.nn.LSTM(
+                input_size=256, 
+                hidden_size=encoder_hidden_size, 
+                num_layers=3, 
+                bidirectional=True, 
+                batch_first=True,
+                dropout=0.3
+                ) #TODO
           )
 
         self.pBLSTMs = torch.nn.Sequential( # How many pBLSTMs are required?
@@ -548,7 +592,10 @@ class Encoder(torch.nn.Module):
             # Hint: You are downsampling timesteps by a factor of 2, upsampling features by a factor of 2 and the LSTM is bidirectional)
             # Optional: Dropout/Locked Dropout after each pBLSTM (Not needed for early submission)
             # https://github.com/salesforce/awd-lstm-lm/blob/dfd3cb0235d2caf2847a4d53e1cbd495b781b5d2/locked_dropout.py#L5
-            pBLSTM(2 * encoder_hidden_size, encoder_hidden_size)
+            pBLSTM(2 * encoder_hidden_size, encoder_hidden_size),
+            LockedDropout(0.3),
+            pBLSTM(2 * encoder_hidden_size, encoder_hidden_size),
+            LockedDropout(0.3),
         )
 
     def forward(self, x, x_lens):
@@ -565,9 +612,8 @@ class Encoder(torch.nn.Module):
         x_packed = self.BLSTMs(x_packed)
 
         # TODO: Pass Sequence through the pyramidal Bi-LSTM layer
-        for pblstm in self.pBLSTMs:
-            x_packed = pblstm(x_packed)
-            x_lens = x_lens // 2
+        for layer in self.pBLSTMs:
+            x_packed = layer(x_packed)
 
         # TODO: Pad Packed Sequence
         encoder_outputs, encoder_lens = pad_packed_sequence(x_packed, batch_first=True)
@@ -595,9 +641,12 @@ class Decoder(torch.nn.Module):
             #TODO define your MLP arch. Refer HW1P2
             #Use Permute Block before and after BatchNorm1d() to match the size
             #Now you can stack your MLP layers
-            torch.nn.Linear(2 * embed_size, embed_size),
-            torch.nn.ReLU(),
-            torch.nn.Linear(embed_size, output_size)
+            nn.Linear(2 * embed_size, embed_size),
+            nn.GELU(),
+            nn.Dropout(0.2),
+            nn.Linear(embed_size, embed_size // 2),
+            nn.GELU(),
+            nn.Linear(embed_size // 2, output_size)
         )
 
         self.softmax = torch.nn.LogSoftmax(dim=2)
@@ -663,11 +712,11 @@ summary(model, input_data=[x.to(device), lx.to(device)])
 
 
 # TODO: Define CTC loss as the criterion. How would the losses be reduced?
-criterion = nn.CTCLoss(reduction='mean', blank=BLANK_IDX) #TODO
+criterion = nn.CTCLoss(reduction='mean', blank=BLANK_IDX, zero_infinity=True) #TODO
 # CTC Loss: https://pytorch.org/docs/stable/generated/torch.nn.CTCLoss.html
 # Refer to the handout for hints
 
-optimizer =  torch.optim.AdamW(model.parameters(), lr=config['learning_rate']) #TODO: What goes in here?
+optimizer =  torch.optim.AdamW(model.parameters(), lr=config['learning_rate'], weight_decay=1e-6) #TODO: What goes in here?
 
 # TODO: Declare the decoder. Use the PyTorch Cuda CTC Decoder to decode phonemes
 # CTC Decoder: https://pytorch.org/audio/2.1/generated/torchaudio.models.decoder.cuda_ctc_decoder.html
