@@ -159,7 +159,7 @@ class AudioDataset(torch.utils.data.Dataset):
             # TODO: Load a single mfcc. Hint: Use numpy
             mfcc             = np.load(os.path.join(self.mfcc_dir, self.mfcc_files[i]))
             # TODO: Do Cepstral Normalization of mfcc along the Time Dimension (Think about the correct axis)
-            mfccs_normalized = (mfcc - np.mean(mfcc, axis=0)) / (np.std(mfcc, axis=0)) #+ 1e-8)
+            mfccs_normalized = (mfcc - np.mean(mfcc, axis=0)) / (np.std(mfcc, axis=0) + 1e-8)
 
             # Convert mfcc to tensor
             mfccs_normalized = torch.tensor(mfccs_normalized, dtype=torch.float32)
@@ -345,7 +345,7 @@ train_loader = torch.utils.data.DataLoader(
 
 val_loader = torch.utils.data.DataLoader(
     dataset     = val_data,
-    num_workers = 0,
+    num_workers = 4,
     batch_size  = config['batch_size'],
     pin_memory  = True,
     shuffle     = False,
@@ -354,7 +354,7 @@ val_loader = torch.utils.data.DataLoader(
 
 test_loader = torch.utils.data.DataLoader(
     dataset     = test_data,
-    num_workers = 0,
+    num_workers = 4,
     batch_size  = config['batch_size'],
     pin_memory  = True,
     shuffle     = False,
@@ -723,7 +723,9 @@ optimizer =  torch.optim.AdamW(model.parameters(), lr=config['learning_rate'], w
 decoder = cuda_ctc_decoder(tokens=LABELS, nbest=1, beam_size=config['train_beam_width']) #TODO
 
 # TODO:
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.5) #TODO
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optimizer, T_0=20, T_mult=2, eta_min=1e-6
+)
 
 # Mixed Precision, if you need it
 scaler = torch.cuda.amp.GradScaler()
@@ -738,13 +740,9 @@ def decode_prediction(output, output_lens, decoder, PHONEME_MAP = LABELS):
 
     # Look at docs for CUDA_CTC_DECODER for more info on how it was used here:
     # https://pytorch.org/audio/main/tutorials/asr_inference_with_cuda_ctc_decoder_tutorial.html
-    print("Started the decoding process")
     output = output.contiguous()
-    print("Output is contiguous")
     output_lens = output_lens.to(torch.int32).contiguous()
-    print("Output lengths are contiguous")
     beam_results = decoder(output, output_lens.to(torch.int32)) #lengths - list of lengths
-    print("Beam created")
     pred_strings = []
 
     for i in range(len(beam_results)):
@@ -865,7 +863,7 @@ if USE_WANDB:
 
 
 # Train function
-def train_model(model, train_loader, criterion, optimizer):
+def train_model(model, train_loader, criterion, optimizer, scheduler, epoch):
 
     model.train()
     batch_bar = tqdm(total=len(train_loader), dynamic_ncols=True, leave=False, position=0, desc='Train')
@@ -893,8 +891,12 @@ def train_model(model, train_loader, criterion, optimizer):
         batch_bar.update() # Update tqdm bar
 
         scaler.scale(loss).backward() # This is a replacement for loss.backward()
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0) 
         scaler.step(optimizer) # This is a replacement for optimizer.step()
         scaler.update() # This is something added just for FP16
+
+        scheduler.step(epoch + i / len(train_loader))
 
         del x, y, lx, ly, h, lh, loss
         torch.cuda.empty_cache()
@@ -1009,7 +1011,7 @@ best_lev_dist = float("inf")
 
 
 # Set up checkpoint directories and WanDB logging watch
-checkpoint_root = os.path.join(os.getcwd(), 'checkpoints')
+checkpoint_root = os.path.join(os.getcwd(), 'hw3_checkpoints')
 os.makedirs(checkpoint_root, exist_ok=True)
 wandb.watch(model, log="all")
 
@@ -1019,8 +1021,8 @@ epoch_model_path = os.path.join(checkpoint_root, checkpoint_last_epoch_filename)
 best_model_path = os.path.join(checkpoint_root, checkpoint_best_model_filename)
 
 # WanDB log watch
-if config['wandb']:
-  wandb.watch(model, log="all")
+# if config['wandb']:
+#   wandb.watch(model, log="all")
 
 
 # In[37]:
@@ -1058,53 +1060,57 @@ print("=" * 40)
 
 # In[39]:
 
+# checkpoint = load_model(epoch_model_path, model, optimizer=optimizer, scheduler=scheduler, metric='valid_dist')
+# model = checkpoint[0]
+# optimizer = checkpoint[1]
+# scheduler = checkpoint[2]
+# last_epoch_completed = checkpoint[3]
+# best_lev_dist = checkpoint[4]
+# #TODO: Please complete the training loop
 
-#TODO: Please complete the training loop
+# for epoch in range(last_epoch_completed, config['epochs']):
 
-for epoch in range(last_epoch_completed, config['epochs']):
+#     print("\nEpoch: {}/{}".format(epoch + 1, config['epochs']))
 
-    print("\nEpoch: {}/{}".format(epoch + 1, config['epochs']))
+#     curr_lr = optimizer.param_groups[0]['lr'] #TODO
 
-    curr_lr = optimizer.param_groups[0]['lr'] #TODO
+#     train_loss = train_model(model, train_loader, criterion, optimizer, scheduler, epoch) #TODO
+#     valid_loss, valid_dist = validate_model(model, val_loader, decoder, LABELS) #TODO
 
-    train_loss = train_model(model, train_loader, criterion, optimizer) #TODO
-    valid_loss, valid_dist = validate_model(model, val_loader, decoder, LABELS) #TODO
+#     # NOTE: Pass in the appropriate argument based on your chosen scheduler
+#     #       -> Some schedulers require a metric, while others require the current epoch
+#     #       -> Some schedulers do not require any argument to be passed in
 
-    # NOTE: Pass in the appropriate argument based on your chosen scheduler
-    #       -> Some schedulers require a metric, while others require the current epoch
-    #       -> Some schedulers do not require any argument to be passed in
-    scheduler.step()
+#     print("\tTrain Loss {:.04f}\t Learning Rate {:.07f}".format(train_loss, curr_lr))
+#     print("\tVal Dist {:.04f}\t Val Loss {:.04f}".format(valid_dist, valid_loss))
 
-    print("\tTrain Loss {:.04f}\t Learning Rate {:.07f}".format(train_loss, curr_lr))
-    print("\tVal Dist {:.04f}\t Val Loss {:.04f}".format(valid_dist, valid_loss))
+#     if config['wandb']:
+#         wandb.log({
+#             'train_loss': train_loss,
+#             'valid_dist': valid_dist,
+#             'valid_loss': valid_loss,
+#             'lr': curr_lr
+#     })
 
-    if config['wandb']:
-        wandb.log({
-            'train_loss': train_loss,
-            'valid_dist': valid_dist,
-            'valid_loss': valid_loss,
-            'lr': curr_lr
-    })
-
-    # Save best model
-    if valid_dist <= best_lev_dist:
-        best_lev_dist = valid_dist
-        save_model(model, optimizer, scheduler, ['valid_dist', valid_dist], epoch+1, best_model_path)
-        if config['wandb']:
-            wandb.save(best_model_path)
-        print("Saved best val model")
+#     # Save best model
+#     if valid_dist <= best_lev_dist:
+#         best_lev_dist = valid_dist
+#         save_model(model, optimizer, scheduler, ['valid_dist', valid_dist], epoch+1, best_model_path)
+#         if config['wandb']:
+#             wandb.save(best_model_path)
+#         print("Saved best val model")
     
-    # Save last epoch model
-    save_model(model, optimizer, scheduler, ['valid_dist', best_lev_dist], epoch+1, epoch_model_path)
-    if config['wandb']:
-        wandb.save(epoch_model_path)
-    print("Saved epoch model")
+#     # Save last epoch model
+#     save_model(model, optimizer, scheduler, ['valid_dist', best_lev_dist], epoch+1, epoch_model_path)
+#     if config['wandb']:
+#         wandb.save(epoch_model_path)
+#     print("Saved epoch model")
 
-# You may find it interesting to explore Wandb Artifacts to version your models
+# # You may find it interesting to explore Wandb Artifacts to version your models
 
-# Finish Wandb run
-if config['wandb']:
-    run.finish()
+# # Finish Wandb run
+# if config['wandb']:
+#     run.finish()
 
 
 # # Generate Predictions
@@ -1126,7 +1132,6 @@ test_decoder = cuda_ctc_decoder(tokens=LABELS, nbest=1, beam_size=config['test_b
 results = []
 
 model.eval()
-print("Testing")
 
 for data in tqdm(test_loader):
 
@@ -1135,9 +1140,6 @@ for data in tqdm(test_loader):
 
     with torch.no_grad():
         h, lh = model(x, lx)
-        
-    torch.cuda.synchronize()  # force any CUDA errors from forward pass to surface here
-    print("forward pass ok", flush=True)
 
     # 2. Decode the beam search results into prediction strings
     # Add before calling decode_prediction
@@ -1147,7 +1149,7 @@ for data in tqdm(test_loader):
     results.extend(prediction_string)
 
     del x, lx, h, lh
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
 
 print(f"✓ Generated {len(results)} predictions")
 
