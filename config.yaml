@@ -4,13 +4,13 @@ subset: 1.0
 learning_rate: 0.001
 epochs: 140
 train_beam_width: 3
-test_beam_width: 7
+test_beam_width: 6
 mfcc_features: 28 # DO NOT MODIFY
 
 # Set embedding size (the dimensionality of the LSTM hidden state)
 embed_size: 256   # {64,128,256} Try out higher embed_size if you have powerfull GPU(RAM) other than T4
 
-batch_size: 32 # Increase if your device can handle it
+batch_size: 64 # Increase if your device can handle it
 
 encoder dropout: 0.2
 lstm dropout: 0.2
