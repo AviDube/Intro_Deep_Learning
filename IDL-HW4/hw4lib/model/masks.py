@@ -25,7 +25,7 @@ def PadMask(padded_input, input_lengths):
     """
     # TODO: Implement PadMask
     T = padded_input.size(1)
-    idx = torch.arange(T).unsqueeze(0)
+    idx = torch.arange(T, device=input_lengths.device).unsqueeze(0)
     mask = idx >= input_lengths.unsqueeze(1)
 
     return mask
@@ -51,7 +51,7 @@ def CausalMask(padded_input):
         Boolean mask tensor with shape (T, T).
     """
     T = padded_input.size(1)
-    mask = torch.triu(torch.ones(T, T), diagonal=1).bool()
+    mask = torch.triu(torch.ones(T, T, device=padded_input.device), diagonal=1).bool()
 
     return mask.to(padded_input.device)
 

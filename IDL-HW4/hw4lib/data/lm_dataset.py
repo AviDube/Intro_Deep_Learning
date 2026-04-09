@@ -67,7 +67,7 @@ class LMDataset(Dataset):
         self.text_files = sorted(os.listdir(self.text_dir))
 
         # TODO: Take subset
-        subset_size = int(config['subset'])
+        subset_size = int(config['subset'] * len(self.text_files))
         self.text_files = self.text_files[:subset_size]
 
         # Initialize lists to store transcripts

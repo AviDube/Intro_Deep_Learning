@@ -166,7 +166,7 @@ class SequenceGenerator:
         
         # TODO: Implement greedy search
         scores = torch.zeros(x.size(0), device=x.device)
-        finished = torch.zeros(x.size(1), dtype=torch.bool, device=x.device)
+        finished = torch.zeros(x.size(0), dtype=torch.bool, device=x.device)
         for t in range(self.max_length - x.size(1)):
             if finished.all():
                 break
