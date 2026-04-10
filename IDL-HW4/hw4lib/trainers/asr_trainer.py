@@ -64,6 +64,7 @@ class ASRTrainer(BaseTrainer):
         # Use value in config to set the label_smoothing argument
         self.criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_id, label_smoothing=self.config['loss']['label_smoothing'])
         
+        self.scaler = torch.amp.GradScaler('cuda')
         # TODO: Initialize CTC loss if needed
         # You can use the pad token id as the blank index
         self.ctc_criterion = None
@@ -115,7 +116,12 @@ class ASRTrainer(BaseTrainer):
                 
                 # TODO: Calculate CTC loss if needed
                 if self.ctc_weight > 0:
-                    ctc_loss = self.ctc_criterion(ctc_inputs, targets_golden, feat_lengths, transcript_lengths)
+                    ctc_loss = self.ctc_criterion(
+                        ctc_inputs['log_probs'],
+                        targets_golden,
+                        ctc_inputs['lengths'],
+                        transcript_lengths
+                    )
                     loss = ce_loss + self.ctc_weight * ctc_loss
                 else:
                     ctc_loss = torch.tensor(0.0)
@@ -133,7 +139,6 @@ class ASRTrainer(BaseTrainer):
             loss = loss / self.config['training']['gradient_accumulation_steps']
 
             # TODO: Backpropagate the loss
-            self.scaler = torch.cuda.amp.GradScaler()
             self.scaler.scale(loss).backward()
 
             # Only update weights after accumulating enough gradients
@@ -222,7 +227,12 @@ class ASRTrainer(BaseTrainer):
                 
                 # TODO: Calculate CTC loss if needed
                 if self.ctc_weight > 0:
-                    ctc_loss = self.ctc_criterion(ctc_inputs, targets_golden, feat_lengths, transcript_lengths)
+                    ctc_loss = self.ctc_criterion(
+                        ctc_inputs['log_probs'],
+                        targets_golden,
+                        ctc_inputs['lengths'],
+                        transcript_lengths
+                    )
                     loss = ce_loss + self.ctc_weight * ctc_loss
                 else:
                     ctc_loss = torch.tensor(0.0)
@@ -261,13 +271,25 @@ class ASRTrainer(BaseTrainer):
         avg_perplexity_char = torch.exp(torch.tensor(avg_ce_loss / dataloader.dataset.get_avg_chars_per_token()))
         batch_bar.close()
 
+        # After batch_bar.close():
+
+        # Run recognition
+        recognition_config = self.config.get('recognition', None)
+        val_results = self.recognize(dataloader, recognition_config, config_name='val')
+
+        # Compute WER/CER from recognition results
+        references  = [r['target']    for r in val_results if 'target' in r]
+        hypotheses  = [r['generated'] for r in val_results if 'target' in r]
+        asr_metrics = self._calculate_asr_metrics(references, hypotheses) if references else {'word_dist': 0, 'wer': 0, 'cer': 0}
+
         return {
-            'ce_loss': avg_ce_loss,
-            'ctc_loss': avg_ctc_loss,
-            'joint_loss': avg_joint_loss,
+            'ce_loss':          avg_ce_loss,
+            'ctc_loss':         avg_ctc_loss,
+            'joint_loss':       avg_joint_loss,
             'perplexity_token': avg_perplexity_token.item(),
-            'perplexity_char': avg_perplexity_char.item()
-        }, running_att
+            'perplexity_char':  avg_perplexity_char.item(),
+            **asr_metrics   # adds 'word_dist', 'wer', 'cer'
+        }, val_results
     
     def train(self, train_dataloader, val_dataloader, epochs: int):
         """
@@ -377,7 +399,7 @@ class ASRTrainer(BaseTrainer):
                     }
                 )
                 eval_results[config_name] = results_df
-                self._save_generated_text(results, f'test_{config_name}_results')
+                self._save_generated_text({'results': results}, f'test_{config_name}_results')
             except Exception as e:
                 print(f"Error evaluating with {config_name} config: {e}")
                 continue
@@ -441,8 +463,12 @@ class ASRTrainer(BaseTrainer):
             for i, batch in enumerate(dataloader):
                 # TODO: Unpack batch and move to device
                 # TODO: Handle both cases where targets may or may not be None (val set v. test set) 
+                # Replace line 466-467 with:
                 feats, _, targets_golden, feat_lengths, _ = batch
-                feats, targets_golden, feat_lengths = feats.to(self.device), targets_golden.to(self.device), feat_lengths.to(self.device)
+                feats = feats.to(self.device)
+                feat_lengths = feat_lengths.to(self.device)
+                if targets_golden is not None:
+                    targets_golden = targets_golden.to(self.device)
                 
                 # TODO: Encode speech features to hidden states
                 encoder_output, pad_mask_src, _, _ = self.model.encode(feats, feat_lengths)
@@ -467,8 +493,7 @@ class ASRTrainer(BaseTrainer):
                     # TODO: If you have implemented beam search, generate sequences using beam search
                     seqs, scores = SequenceGenerator.generate_beam(
                         generator,
-                        prompts,
-                        max_length=recognition_config.get('max_length', self.text_max_len)
+                        prompts
                     )
                     # Pick best beam
                     seqs = seqs[:, 0, :]
@@ -477,8 +502,7 @@ class ASRTrainer(BaseTrainer):
                     # TODO: Generate sequences using greedy search
                     seqs, scores = SequenceGenerator.generate_greedy(
                         generator,
-                        prompts,
-                        max_length=recognition_config.get('max_length', self.text_max_len)
+                        prompts
                     )
 
                 # Clean up
