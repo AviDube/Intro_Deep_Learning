@@ -62,7 +62,7 @@ class ASRTrainer(BaseTrainer):
         # TODO: Initialize CE loss
         # How would you set the ignore_index? 
         # Use value in config to set the label_smoothing argument
-        self.criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_id, label_smoothing=self.config['loss']['label_smoothing'])
+        self.ce_criterion = nn.CrossEntropyLoss(ignore_index=self.tokenizer.pad_id, label_smoothing=self.config['loss']['label_smoothing'])
         
         self.scaler = torch.amp.GradScaler('cuda')
         # TODO: Initialize CTC loss if needed
@@ -111,7 +111,7 @@ class ASRTrainer(BaseTrainer):
                 running_att = curr_att
                 
                 # TODO: Calculate CE loss
-                ce_loss = self.criterion(seq_out.view(-1, self.model.num_classes), targets_golden.view(-1))
+                ce_loss = self.ce_criterion(seq_out.view(-1, self.model.num_classes), targets_golden.view(-1))
                 
                 
                 # TODO: Calculate CTC loss if needed
@@ -274,7 +274,7 @@ class ASRTrainer(BaseTrainer):
         # After batch_bar.close():
 
         # Run recognition
-        recognition_config = self.config.get('recognition', None)
+        recognition_config = self.config.get('decoding', None)
         val_results = self.recognize(dataloader, recognition_config, config_name='val')
 
         # Compute WER/CER from recognition results
@@ -491,18 +491,21 @@ class ASRTrainer(BaseTrainer):
                 # TODO: Generate sequences
                 if recognition_config['beam_width'] > 1:
                     # TODO: If you have implemented beam search, generate sequences using beam search
-                    seqs, scores = SequenceGenerator.generate_beam(
-                        generator,
-                        prompts
+                    seqs, scores = generator.generate_beam(
+                        prompts,
+                        beam_width=recognition_config['beam_width'],
+                        temperature=recognition_config.get('temperature', 1.0),
+                        repeat_penalty=recognition_config.get('repeat_penalty', 1.0)
                     )
                     # Pick best beam
                     seqs = seqs[:, 0, :]
                     scores = scores[:, 0]
                 else:
                     # TODO: Generate sequences using greedy search
-                    seqs, scores = SequenceGenerator.generate_greedy(
-                        generator,
-                        prompts
+                    seqs, scores = generator.generate_greedy(
+                        prompts,
+                        temperature=recognition_config.get('temperature', 1.0),
+                        repeat_penalty=recognition_config.get('repeat_penalty', 1.0)
                     )
 
                 # Clean up
