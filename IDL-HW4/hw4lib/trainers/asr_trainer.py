@@ -144,9 +144,9 @@ class ASRTrainer(BaseTrainer):
             # Only update weights after accumulating enough gradients
             if (i + 1) % self.config['training']['gradient_accumulation_steps'] == 0:
                 self.scaler.step(self.optimizer)
+                self.scaler.update()
                 if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                     self.scheduler.step()
-                self.scaler.update()
                 self.optimizer.zero_grad()
 
             # Update progress bar
@@ -172,9 +172,9 @@ class ASRTrainer(BaseTrainer):
         # Handle remaining gradients
         if (len(dataloader) % self.config['training']['gradient_accumulation_steps']) != 0:
             self.scaler.step(self.optimizer)
+            self.scaler.update()
             if not isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 self.scheduler.step()
-            self.scaler.update()
             self.optimizer.zero_grad()
 
         # Compute final metrics
@@ -222,7 +222,7 @@ class ASRTrainer(BaseTrainer):
                 running_att = curr_att
                 
                 # TODO: Calculate CE loss
-                ce_loss = self.criterion(seq_out.view(-1, self.model.num_classes), targets_golden.view(-1))
+                ce_loss = self.ce_criterion(seq_out.view(-1, self.model.num_classes), targets_golden.view(-1))
                 
                 
                 # TODO: Calculate CTC loss if needed
@@ -274,7 +274,8 @@ class ASRTrainer(BaseTrainer):
         # After batch_bar.close():
 
         # Run recognition
-        recognition_config = self.config.get('decoding', None)
+        # New
+        recognition_config = self.config.get('decoding', {}).get('val', None)
         val_results = self.recognize(dataloader, recognition_config, config_name='val')
 
         # Compute WER/CER from recognition results

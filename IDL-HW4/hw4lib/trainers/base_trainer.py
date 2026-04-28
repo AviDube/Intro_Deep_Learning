@@ -10,6 +10,7 @@ from hw4lib.utils import create_optimizer
 from hw4lib.model import DecoderOnlyTransformer, EncoderDecoderTransformer
 import os
 import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, Tuple
 from torchinfo import summary
@@ -221,6 +222,16 @@ class BaseTrainer(ABC):
                     wandb_metrics[f'{split}/{metric_name}'] = value
             wandb_metrics['learning_rate'] = self.optimizer.param_groups[0]['lr']
             wandb.log(wandb_metrics, step=step)
+            try:
+                # We find the path to the current run directory
+                run_dir = wandb.run.dir.replace("/files", "")
+                # We call the CLI sync command as a background process
+                subprocess.Popen(["wandb", "sync", run_dir], 
+                                stdout=subprocess.DEVNULL, 
+                                stderr=subprocess.DEVNULL)
+                print(f"└── WANDB: Syncing epoch {step} in background...")
+            except Exception as e:
+                print(f"└── WANDB: Background sync failed (expected on compute node)")
         
         # Print metrics with tree structure
         print(f"\n📊 Metrics (Epoch {step}):")
